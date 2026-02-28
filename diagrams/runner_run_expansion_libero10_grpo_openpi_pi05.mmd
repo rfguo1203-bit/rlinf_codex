@@ -1,0 +1,37 @@
+flowchart TD
+  A[run_embodiment.sh libero_10_grpo_openpi_pi05] --> B[train_embodied_agent.py main]
+  B --> C[validate_cfg]
+  B --> D[launch Actor/Rollout/Env WorkerGroup]
+  D --> E[EmbodiedRunner.init_workers]
+  E --> E1[actor.init_worker]
+  E --> E2[rollout.init_worker]
+  E --> E3[env.init_worker]
+  E --> F[EmbodiedRunner.run loop]
+
+  F --> G[set_global_step actor+rollout]
+  F --> H{step % weight_sync_interval == 0}
+  H -->|yes| I[update_rollout_weights]
+  I --> I1[actor.sync_model_to_rollout]
+  I --> I2[rollout.sync_model_from_actor]
+
+  F --> J[generate_rollouts]
+  J --> J1[env.interact]
+  J --> J2[rollout.generate]
+  J --> J3[actor.recv_rollout_trajectories]
+
+  J1 --> K1[prepare_actions to LiberoEnv.chunk_step to EnvOutput]
+  J2 --> K2[OpenPI predict_action_batch to Trajectory]
+  J3 --> K3[convert_trajectories_to_batch]
+
+  F --> L[actor.compute_advantages_and_returns]
+  L --> L1[registry.calculate_adv_and_returns]
+  L1 --> L2[grpo: calculate_scores + compute_grpo_advantages]
+
+  F --> M[actor.run_training]
+  M --> M1[OpenPI.default_forward/get_log_prob_value]
+  M --> M2[policy_loss actor to PPO clipped loss]
+  M --> M3[optimizer_step + lr_scheduler]
+
+  F --> N[check_progress]
+  N -->|every 40 steps| O[_save_checkpoint actor]
+  F --> P[metric_logger.log + print_metrics_table_async]
