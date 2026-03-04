@@ -150,8 +150,69 @@ class LocalEnvWorker(EnvWorker):
         self._component_placement = _LocalPlacement()
         self.train_dst_ranks = [0]
         self.eval_dst_ranks = [0]
+        if not self.only_eval:
+            self.train_num_envs_per_stage = (
+                self.cfg.env.train.total_num_envs // self._world_size // self.stage_num
+            )
+        else:
+            self.train_num_envs_per_stage = 0
+        if self.enable_eval:
+            self.eval_num_envs_per_stage = (
+                self.cfg.env.eval.total_num_envs // self._world_size // self.stage_num
+            )
+        else:
+            self.eval_num_envs_per_stage = 0
+        self.n_train_chunk_steps = (
+            self.cfg.env.train.max_steps_per_rollout_epoch
+            // self.cfg.actor.model.num_action_chunks
+        )
+        self.n_eval_chunk_steps = (
+            self.cfg.env.eval.max_steps_per_rollout_epoch
+            // self.cfg.actor.model.num_action_chunks
+        )
+
+    def _ensure_compat_attrs(self) -> None:
+        """Fill compatibility attrs for env worker variants across commits."""
+        if not hasattr(self, "enable_offload"):
+            self.enable_offload = self.cfg.env.train.get("enable_offload", False)
+        if not hasattr(self, "enable_eval_offload"):
+            self.enable_eval_offload = self.cfg.env.eval.get("enable_offload", False)
+        if not hasattr(self, "enable_train"):
+            self.enable_train = not getattr(self.cfg.runner, "only_eval", False)
+        if not hasattr(self, "enable_eval"):
+            self.enable_eval = (
+                self.cfg.runner.val_check_interval > 0
+                or getattr(self.cfg.runner, "only_eval", False)
+            )
+        if not hasattr(self, "train_num_envs_per_stage"):
+            self.train_num_envs_per_stage = (
+                self.cfg.env.train.total_num_envs // self._world_size // self.stage_num
+                if not getattr(self, "only_eval", False)
+                else 0
+            )
+        if not hasattr(self, "eval_num_envs_per_stage"):
+            self.eval_num_envs_per_stage = (
+                self.cfg.env.eval.total_num_envs // self._world_size // self.stage_num
+                if getattr(self, "enable_eval", False)
+                else 0
+            )
+        if not hasattr(self, "n_train_chunk_steps"):
+            self.n_train_chunk_steps = (
+                self.cfg.env.train.max_steps_per_rollout_epoch
+                // self.cfg.actor.model.num_action_chunks
+            )
+        if not hasattr(self, "n_eval_chunk_steps"):
+            self.n_eval_chunk_steps = (
+                self.cfg.env.eval.max_steps_per_rollout_epoch
+                // self.cfg.actor.model.num_action_chunks
+            )
+        if not hasattr(self, "train_dst_ranks"):
+            self.train_dst_ranks = [0]
+        if not hasattr(self, "eval_dst_ranks"):
+            self.eval_dst_ranks = [0]
 
     def init_worker(self):
+        self._ensure_compat_attrs()
         train_env_cls = get_env_cls(self.cfg.env.train.env_type, self.cfg.env.train)
         eval_env_cls = get_env_cls(self.cfg.env.eval.env_type, self.cfg.env.eval)
 
@@ -239,9 +300,15 @@ class LocalRolloutWorker(MultiStepRolloutWorker):
         self.train_dst_ranks = [0]
         self.eval_dst_ranks = [0]
 
-    def init_worker(self):
-        super().init_worker()
-        # Compatibility for rollout worker variants across commits.
+    def _ensure_compat_attrs(self) -> None:
+        """Fill compatibility attrs for rollout worker variants across commits."""
+        if not hasattr(self, "enable_train"):
+            self.enable_train = not getattr(self.cfg.runner, "only_eval", False)
+        if not hasattr(self, "enable_eval"):
+            self.enable_eval = (
+                self.cfg.runner.val_check_interval > 0
+                or getattr(self.cfg.runner, "only_eval", False)
+            )
         if not hasattr(self, "n_train_chunk_steps"):
             self.n_train_chunk_steps = (
                 self.cfg.env.train.max_steps_per_rollout_epoch
@@ -252,17 +319,22 @@ class LocalRolloutWorker(MultiStepRolloutWorker):
                 self.cfg.env.eval.max_steps_per_rollout_epoch
                 // self.cfg.actor.model.num_action_chunks
             )
-        if not hasattr(self, "enable_train"):
-            self.enable_train = not getattr(self.cfg.runner, "only_eval", False)
-        if not hasattr(self, "enable_eval"):
-            self.enable_eval = (
-                self.cfg.runner.val_check_interval > 0
-                or getattr(self.cfg.runner, "only_eval", False)
-            )
         if not hasattr(self, "train_dst_ranks"):
             self.train_dst_ranks = [0]
         if not hasattr(self, "eval_dst_ranks"):
             self.eval_dst_ranks = [0]
+        if not hasattr(self, "placement"):
+            class _LocalPlacement:
+                @staticmethod
+                def get_world_size(_component: str) -> int:
+                    return 1
+
+            self.placement = _LocalPlacement()
+
+    def init_worker(self):
+        self._ensure_compat_attrs()
+        super().init_worker()
+        self._ensure_compat_attrs()
 
     def sync_model_from_actor_state(self, state_dict: dict[str, torch.Tensor]) -> None:
         self.hf_model.load_state_dict(state_dict)
