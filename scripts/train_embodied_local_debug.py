@@ -19,6 +19,7 @@ for single-machine/single-GPU runs, while removing Ray and using local channels.
 """
 
 import asyncio
+import copy
 import gc
 import json
 import os
@@ -47,6 +48,7 @@ from rlinf.data.embodied_io_struct import (
 )
 from rlinf.envs import get_env_cls
 from rlinf.envs.wrappers import RecordVideo
+from rlinf.models import get_model
 from rlinf.scheduler import Channel
 from rlinf.utils.distributed import ScopedTimer
 from rlinf.utils.logging import get_logger
@@ -339,8 +341,39 @@ class LocalRolloutWorker(MultiStepRolloutWorker):
             self.placement = _LocalPlacement()
 
     def init_worker(self):
+        # Do NOT call parent init_worker here.
+        # Upstream variants may initialize Cluster()/Ray in parent init_worker.
         self._ensure_compat_attrs()
-        super().init_worker()
+
+        rollout_model_config = copy.deepcopy(self.cfg.actor.model)
+        with open_dict(rollout_model_config):
+            rollout_model_config.precision = self.cfg.rollout.model.precision
+            rollout_model_config.model_path = self.cfg.rollout.model.model_path
+
+        self.hf_model = get_model(rollout_model_config)
+
+        if self.cfg.runner.get("ckpt_path", None):
+            model_dict = torch.load(self.cfg.runner.ckpt_path)
+            self.hf_model.load_state_dict(model_dict)
+
+        self.hf_model.eval()
+
+        if self.cfg.rollout.get("enable_torch_compile", False):
+            mode = self.cfg.rollout.get(
+                "torch_compile_mode", "max-autotune-no-cudagraphs"
+            )
+            self.hf_model.enable_torch_compile(mode=mode)
+
+        if self.enable_cuda_graph and not self.enable_offload:
+            self.hf_model.capture_cuda_graph(
+                train_batch_size=self.train_batch_size,
+                eval_batch_size=self.eval_batch_size,
+            )
+
+        self.setup_sample_params()
+        if self.enable_offload:
+            self.offload_model()
+
         self._ensure_compat_attrs()
 
     def sync_model_from_actor_state(self, state_dict: dict[str, torch.Tensor]) -> None:
