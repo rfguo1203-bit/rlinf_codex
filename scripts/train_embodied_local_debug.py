@@ -194,6 +194,9 @@ class LocalRolloutWorker(MultiStepRolloutWorker):
 
         self.num_pipeline_stages = cfg.rollout.pipeline_stage_num
         self.enable_offload = self.cfg.rollout.get("enable_offload", False)
+        self.only_eval = getattr(self.cfg.runner, "only_eval", False)
+        self.enable_train = not self.only_eval
+        self.enable_eval = self.cfg.runner.val_check_interval > 0 or self.only_eval
 
         self.actor_weight_src_rank = 0
 
@@ -220,6 +223,9 @@ class LocalRolloutWorker(MultiStepRolloutWorker):
                 return 1
 
         self.placement = _LocalPlacement()
+        # Compatibility for newer rollout worker implementations.
+        self.train_dst_ranks = [0]
+        self.eval_dst_ranks = [0]
 
     def sync_model_from_actor_state(self, state_dict: dict[str, torch.Tensor]) -> None:
         self.hf_model.load_state_dict(state_dict)
