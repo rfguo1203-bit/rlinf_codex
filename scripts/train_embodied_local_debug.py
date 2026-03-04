@@ -137,7 +137,19 @@ class LocalEnvWorker(EnvWorker):
         self.stage_num = self.cfg.rollout.pipeline_stage_num
 
         self.only_eval = getattr(self.cfg.runner, "only_eval", False)
+        self.enable_train = not self.only_eval
         self.enable_eval = self.cfg.runner.val_check_interval > 0 or self.only_eval
+        self.enable_offload = self.cfg.env.train.get("enable_offload", False)
+        self.enable_eval_offload = self.cfg.env.eval.get("enable_offload", False)
+        # Compatibility for newer env worker implementations.
+        class _LocalPlacement:
+            @staticmethod
+            def get_world_size(_component: str) -> int:
+                return 1
+
+        self._component_placement = _LocalPlacement()
+        self.train_dst_ranks = [0]
+        self.eval_dst_ranks = [0]
         if not self.only_eval:
             self.train_num_envs_per_stage = (
                 self.cfg.env.train.total_num_envs // self._world_size // self.stage_num
