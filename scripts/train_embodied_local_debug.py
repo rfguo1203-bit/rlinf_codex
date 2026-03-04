@@ -26,6 +26,7 @@ import queue
 import socket
 import threading
 import time
+from collections import defaultdict
 from contextlib import contextmanager
 from datetime import timedelta
 from typing import Any
@@ -37,7 +38,13 @@ import torch.multiprocessing as mp
 from omegaconf import DictConfig, OmegaConf, open_dict
 
 from rlinf.config import validate_fsdp_cfg
-from rlinf.data.embodied_io_struct import Trajectory, convert_trajectories_to_batch
+from rlinf.data.embodied_io_struct import (
+    ChunkStepResult,
+    EmbodiedRolloutResult,
+    EnvOutput,
+    Trajectory,
+    convert_trajectories_to_batch,
+)
 from rlinf.envs import get_env_cls
 from rlinf.envs.wrappers import RecordVideo
 from rlinf.scheduler import Channel
@@ -458,36 +465,207 @@ class LocalEmbodiedRunner:
     def _run_interact_and_generate(
         self,
     ) -> tuple[dict[str, torch.Tensor], dict[str, torch.Tensor]]:
-        error_q: queue.Queue[Exception] = queue.Queue()
-        env_result: dict[str, Any] = {"metrics": None}
+        if self.rollout.enable_offload:
+            self.rollout.reload_model()
 
-        def env_job():
-            try:
-                env_result["metrics"] = self.env.interact(
-                    input_channel=self.rollout_channel,
-                    output_channel=self.env_channel,
-                )
-            except Exception as exc:  # pragma: no cover - passthrough
-                error_q.put(exc)
-
-        thread = threading.Thread(target=env_job, daemon=True)
-        thread.start()
-
-        asyncio.run(
-            self.rollout.generate(
-                input_channel=self.env_channel,
-                output_channel=self.rollout_channel,
-                actor_channel=self.actor_channel,
+        self.rollout.rollout_results = [
+            EmbodiedRolloutResult(
+                max_episode_length=self.cfg.env.train.max_episode_steps,
+                model_weights_id=self.rollout.model_weights_id,
             )
+            for _ in range(self.rollout.num_pipeline_stages)
+        ]
+
+        n_chunk_steps = self.rollout.n_train_chunk_steps
+        env_metrics = defaultdict(list)
+        last_obs = [None for _ in range(self.rollout.num_pipeline_stages)]
+
+        with self.env.worker_timer("interact"), self.rollout.worker_timer("generate"):
+            for epoch in range(self.cfg.algorithm.rollout_epoch):
+                env_output_list: list[dict[str, Any]] = []
+                if not self.cfg.env.train.auto_reset:
+                    for stage_id in range(self.env.stage_num):
+                        self.env.env_list[stage_id].is_start = True
+                        extracted_obs, infos = self.env.env_list[stage_id].reset()
+                        dones = (
+                            torch.zeros((self.env.train_num_envs_per_stage,), dtype=bool)
+                            .unsqueeze(1)
+                            .repeat(1, self.cfg.actor.model.num_action_chunks)
+                        )
+                        terminations = dones.clone()
+                        truncations = dones.clone()
+                        env_output = EnvOutput(
+                            obs=extracted_obs,
+                            dones=dones,
+                            terminations=terminations,
+                            truncations=truncations,
+                            final_obs=infos["final_observation"]
+                            if "final_observation" in infos
+                            else None,
+                            intervene_actions=None,
+                            intervene_flags=None,
+                        )
+                        env_output_list.append(env_output.to_dict())
+                else:
+                    self.env.num_done_envs = 0
+                    self.env.num_succ_envs = 0
+                    dones = (
+                        torch.zeros((self.env.train_num_envs_per_stage,), dtype=bool)
+                        .unsqueeze(1)
+                        .repeat(1, self.cfg.actor.model.num_action_chunks)
+                    )
+                    terminations = dones.clone()
+                    truncations = dones.clone()
+                    for stage_id in range(self.env.stage_num):
+                        env_output = EnvOutput(
+                            obs=self.env.last_obs_list[stage_id],
+                            rewards=None,
+                            dones=dones,
+                            terminations=terminations,
+                            truncations=truncations,
+                            intervene_actions=self.env.last_intervened_info_list[
+                                stage_id
+                            ][0],
+                            intervene_flags=self.env.last_intervened_info_list[stage_id][
+                                1
+                            ],
+                        )
+                        env_output_list.append(env_output.to_dict())
+
+                for _ in range(n_chunk_steps):
+                    for stage_id in range(self.rollout.num_pipeline_stages):
+                        env_output = env_output_list[stage_id]
+                        if env_output["intervene_actions"] is not None:
+                            self.rollout.rollout_results[stage_id].update_last_actions(
+                                env_output["intervene_actions"],
+                                env_output["intervene_flags"],
+                            )
+
+                        dones, rewards = self.rollout.get_dones_and_rewards(env_output)
+                        actions, result = self.rollout.predict(env_output["obs"])
+
+                        env_output["obs"].pop("task_descriptions", None)
+                        if env_output["final_obs"] is not None:
+                            env_output["final_obs"].pop("task_descriptions", None)
+
+                        chunk_step_result = ChunkStepResult(
+                            actions=result["forward_inputs"].get("action", None),
+                            dones=dones,
+                            rewards=rewards,
+                            truncations=env_output["truncations"],
+                            terminations=env_output["terminations"],
+                            prev_logprobs=result["prev_logprobs"]
+                            if self.cfg.rollout.get("collect_prev_infos", True)
+                            else None,
+                            prev_values=result["prev_values"]
+                            if self.cfg.rollout.get("collect_prev_infos", True)
+                            else None,
+                            forward_inputs=result["forward_inputs"],
+                        )
+
+                        self.rollout.rollout_results[stage_id].append_step_result(
+                            chunk_step_result
+                        )
+                        if self.rollout.collect_transitions and last_obs[stage_id] is not None:
+                            curr_obs = last_obs[stage_id]
+                            next_obs = (
+                                env_output["final_obs"]
+                                if dones.any() and self.cfg.env.train.auto_reset
+                                else env_output["obs"]
+                            )
+                            self.rollout.rollout_results[
+                                stage_id
+                            ].append_transitions(curr_obs, next_obs)
+                        last_obs[stage_id] = env_output["obs"]
+
+                        next_env_output, env_info = self.env.env_interact_step(
+                            actions, stage_id
+                        )
+                        env_output_list[stage_id] = next_env_output.to_dict()
+                        for key, value in env_info.items():
+                            if (
+                                not self.cfg.env.train.auto_reset
+                                and not self.cfg.env.train.ignore_terminations
+                            ):
+                                if key in env_metrics and len(env_metrics[key]) > epoch:
+                                    env_metrics[key][epoch] = value
+                                else:
+                                    env_metrics[key].append(value)
+                            else:
+                                env_metrics[key].append(value)
+
+                for stage_id in range(self.rollout.num_pipeline_stages):
+                    env_output = env_output_list[stage_id]
+                    if env_output["intervene_actions"] is not None:
+                        self.rollout.rollout_results[stage_id].update_last_actions(
+                            env_output["intervene_actions"],
+                            env_output["intervene_flags"],
+                        )
+
+                    dones, rewards = self.rollout.get_dones_and_rewards(env_output)
+                    _, result = self.rollout.predict(env_output["obs"])
+
+                    env_output["obs"].pop("task_descriptions", None)
+                    if env_output["final_obs"] is not None:
+                        env_output["final_obs"].pop("task_descriptions", None)
+
+                    chunk_step_result = ChunkStepResult(
+                        dones=dones,
+                        rewards=rewards,
+                        truncations=env_output["truncations"],
+                        terminations=env_output["terminations"],
+                        prev_logprobs=None,
+                        prev_values=result["prev_values"]
+                        if self.cfg.rollout.get("collect_prev_infos", True)
+                        else None,
+                        forward_inputs=None,
+                    )
+                    self.rollout.rollout_results[stage_id].append_step_result(
+                        chunk_step_result
+                    )
+                    if self.rollout.collect_transitions and last_obs[stage_id] is not None:
+                        curr_obs = last_obs[stage_id]
+                        next_obs = (
+                            env_output["final_obs"]
+                            if dones.any() and self.cfg.env.train.auto_reset
+                            else env_output["obs"]
+                        )
+                        self.rollout.rollout_results[stage_id].append_transitions(
+                            curr_obs, next_obs
+                        )
+
+                self.env.last_obs_list = [eo["obs"] for eo in env_output_list]
+                self.env.last_intervened_info_list = [
+                    (eo["intervene_actions"], eo["intervene_flags"])
+                    for eo in env_output_list
+                ]
+                self.env.finish_rollout()
+
+        if self.rollout.enable_offload:
+            self.rollout.offload_model()
+        for env_obj in self.env.env_list:
+            if self.cfg.env.train.get("enable_offload", False) and hasattr(
+                env_obj, "offload"
+            ):
+                env_obj.offload()
+
+        for key, value in env_metrics.items():
+            env_metrics[key] = torch.cat(value, dim=0).contiguous().cpu()
+
+        recv_list = []
+        split_num = self.rollout.get_actor_split_num()
+        for stage_id in range(self.rollout.num_pipeline_stages):
+            recv_list.extend(
+                self.rollout.rollout_results[stage_id].to_splited_trajectories(
+                    split_num
+                )
+            )
+        self.actor.rollout_batch = convert_trajectories_to_batch(recv_list)
+        self.actor.rollout_batch = self.actor._process_received_rollout_batch(
+            self.actor.rollout_batch
         )
-        thread.join()
-
-        if not error_q.empty():
-            raise error_q.get()
-
-        self.actor.recv_rollout_trajectories(input_channel=self.actor_channel)
         rollout_metrics = self.actor.compute_advantages_and_returns()
-        return env_result["metrics"], rollout_metrics
+        return dict(env_metrics), rollout_metrics
 
     def evaluate(self):
         error_q: queue.Queue[Exception] = queue.Queue()
