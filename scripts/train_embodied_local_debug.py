@@ -211,6 +211,15 @@ class LocalRolloutWorker(MultiStepRolloutWorker):
             self.total_num_eval_envs // self._world_size // self.num_pipeline_stages
         )
         self.enable_cuda_graph = cfg.rollout.get("enable_cuda_graph", False)
+        # Compatibility shim:
+        # Upstream versions may access self.placement in init_worker/_setup_dst_ranks.
+        # For local single-process debug, all component world sizes are 1.
+        class _LocalPlacement:
+            @staticmethod
+            def get_world_size(_component: str) -> int:
+                return 1
+
+        self.placement = _LocalPlacement()
 
     def sync_model_from_actor_state(self, state_dict: dict[str, torch.Tensor]) -> None:
         self.hf_model.load_state_dict(state_dict)
