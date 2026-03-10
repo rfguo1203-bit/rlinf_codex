@@ -3,7 +3,7 @@
 export SCRIPT_PATH="$( cd "$(dirname "${BASH_SOURCE[0]}" )" && pwd )"
 export REPO_PATH=$(dirname "$SCRIPT_PATH")
 export EMBODIED_PATH="${REPO_PATH}/examples/embodiment"
-export SRC_FILE="${SCRIPT_PATH}/train_embodied_local_pi05_debug.py"
+export SRC_FILE="${SCRIPT_PATH}/train_embodied_local_debug.py"
 
 export MUJOCO_GL="egl"
 export PYOPENGL_PLATFORM="egl"
@@ -24,7 +24,7 @@ export EXP_PATH=${EXP_PATH:-$ISAAC_PATH/apps}
 export CARB_APP_PATH=${CARB_APP_PATH:-$ISAAC_PATH/kit}
 
 if [ -z "$1" ]; then
-    CONFIG_NAME="frankasim_ppo_cnn"
+    CONFIG_NAME="frankasim_ppo_openpi_pi05_local_debug"
 else
     CONFIG_NAME=$1
 fi
@@ -40,8 +40,8 @@ echo "Using ROBOT_PLATFORM=$ROBOT_PLATFORM"
 echo "Using PI05_MODEL_PATH=$PI05_MODEL_PATH"
 echo "Using Python at $(which python)"
 
-LOG_DIR="${REPO_PATH}/logs/$(date +'%Y%m%d-%H:%M:%S')-${CONFIG_NAME}-local-pi05-debug"
-MEGA_LOG_FILE="${LOG_DIR}/run_embodiment_local_pi05_debug.log"
+LOG_DIR="${REPO_PATH}/logs/$(date +'%Y%m%d-%H:%M:%S')-${CONFIG_NAME}-local-debug"
+MEGA_LOG_FILE="${LOG_DIR}/run_embodiment_local_debug_pi05.log"
 mkdir -p "${LOG_DIR}"
 
 OVERRIDES="runner.logger.log_path=${LOG_DIR} actor.model.model_path=${PI05_MODEL_PATH} rollout.model.model_path=${PI05_MODEL_PATH}"

@@ -1,0 +1,49 @@
+defaults:
+  - frankasim_ppo_cnn
+
+runner:
+  logger:
+    experiment_name: "franka_sim_ppo_openpi_pi05_local_debug"
+
+algorithm:
+  adv_type: gae
+  loss_type: actor_critic
+  reward_type: chunk_level
+  logprob_type: chunk_level
+  entropy_type: token_level
+  entropy_bonus: 0.0
+
+env:
+  train:
+    wrap_obs_mode: openpi
+  eval:
+    wrap_obs_mode: openpi
+
+rollout:
+  model:
+    model_path: "/path/to/model/RLinf-Pi05-SFT"
+    precision: ${actor.model.precision}
+
+actor:
+  model:
+    model_type: "openpi"
+    model_path: "/path/to/model/RLinf-Pi05-SFT"
+    precision: null
+    action_dim: 4
+    num_action_chunks: 1
+    num_steps: 3
+    add_value_head: true
+    openpi:
+      config_name: "pi0_custom"
+      pi05: true
+      num_images_in_input: 2
+      noise_method: "flow_sde"
+      noise_level: 0.5
+      action_chunk: ${actor.model.num_action_chunks}
+      num_steps: ${actor.model.num_steps}
+      train_expert_only: true
+      action_env_dim: ${actor.model.action_dim}
+      add_value_head: ${actor.model.add_value_head}
+      value_after_vlm: true
+  fsdp_config:
+    gradient_checkpointing: false
