@@ -3,12 +3,13 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SERL_DIR="${ROOT_DIR}/external_deps/serl"
+SERL_DIR="${ROOT_DIR}/env_additional/serl"
 SERL_REPO="RLinf/serl"
+SERL_REPO_URL="https://github.com/${SERL_REPO}.git"
 SERL_BRANCH="RLinf/franka-sim"
 
-if ! command -v gh >/dev/null 2>&1; then
-  echo "[ERROR] gh is required but not found. Please install GitHub CLI first." >&2
+if ! command -v git >/dev/null 2>&1; then
+  echo "[ERROR] git is required but not found." >&2
   exit 1
 fi
 
@@ -22,11 +23,11 @@ if ! command -v python >/dev/null 2>&1; then
   exit 1
 fi
 
-mkdir -p "${ROOT_DIR}/external_deps"
+mkdir -p "${ROOT_DIR}/env_additional"
 
 echo "[INFO] Syncing ${SERL_REPO} (${SERL_BRANCH}) into ${SERL_DIR}"
 if [ ! -d "${SERL_DIR}/.git" ]; then
-  gh repo clone "${SERL_REPO}" "${SERL_DIR}" -- --branch "${SERL_BRANCH}"
+  git clone --branch "${SERL_BRANCH}" "${SERL_REPO_URL}" "${SERL_DIR}"
 else
   git -C "${SERL_DIR}" fetch origin
   git -C "${SERL_DIR}" checkout "${SERL_BRANCH}"
