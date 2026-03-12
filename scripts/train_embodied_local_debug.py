@@ -362,7 +362,13 @@ class LocalRolloutWorker(MultiStepRolloutWorker):
             mode = self.cfg.rollout.get(
                 "torch_compile_mode", "max-autotune-no-cudagraphs"
             )
-            self.hf_model.enable_torch_compile(mode=mode)
+            try:
+                self.hf_model.enable_torch_compile(mode=mode)
+            except NotImplementedError:
+                self._logger.warning(
+                    "rollout.enable_torch_compile=True but current policy does not "
+                    "support torch.compile; fallback to eager mode."
+                )
 
         if self.enable_cuda_graph and not self.enable_offload:
             self.hf_model.capture_cuda_graph(
