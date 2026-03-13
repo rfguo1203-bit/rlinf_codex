@@ -90,7 +90,7 @@ env:
   train:
     obs_format: tensor
     wrap_obs_mode: openpi
-    total_num_envs: 8
+    total_num_envs: 16
     group_size: ${algorithm.group_size}
     max_steps_per_rollout_epoch: 256
     max_episode_steps: 100
@@ -106,7 +106,7 @@ env:
   eval:
     obs_format: tensor
     wrap_obs_mode: openpi
-    total_num_envs: 8
+    total_num_envs: 16
     group_size: ${algorithm.group_size}
     max_steps_per_rollout_epoch: 256
     max_episode_steps: 100
@@ -122,7 +122,7 @@ rollout:
   group_name: RolloutGroup
   backend: huggingface
   enable_offload: false
-  pipeline_stage_num: 1
+  pipeline_stage_num: 2
   collect_prev_infos: true
 
   model:
@@ -135,8 +135,8 @@ rollout:
 actor:
   group_name: ActorGroup
   training_backend: fsdp
-  micro_batch_size: 256
-  global_batch_size: 256
+  micro_batch_size: 384
+  global_batch_size: 1152
   seed: 1234
   enable_offload: false
 
