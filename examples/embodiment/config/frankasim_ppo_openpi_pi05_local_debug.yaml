@@ -126,7 +126,7 @@ rollout:
   collect_prev_infos: true
 
   model:
-    model_path: "/path/to/model/RLinf-Pi05-SFT"
+    model_path: "/workspace/RLinf/weight/RLinf-Pi05-SFT"
     precision: ${actor.model.precision}
 
   enable_torch_compile: false
@@ -135,14 +135,14 @@ rollout:
 actor:
   group_name: ActorGroup
   training_backend: fsdp
-  micro_batch_size: 384
-  global_batch_size: 1152
+  micro_batch_size: 320
+  global_batch_size: 960
   seed: 1234
   enable_offload: false
 
   model:
     model_type: "openpi"
-    model_path: "/path/to/model/RLinf-Pi05-SFT"
+    model_path: "/workspace/RLinf/weight/RLinf-Pi05-SFT"
     precision: null
     action_dim: 4
     num_action_chunks: 1
