@@ -1,0 +1,275 @@
+# FrankaSim PPO PI05 训练配置文件
+# 基于 frankasim_ppo_mlp.yaml 和 maniskill_ppo_openpi_pi05.yaml 整合
+# 针对 FrankaSim 仿真环境使用 PPO 算法训练 PI05 模型
+
+defaults:
+  - env/frankasim_pickcube_vision@env.train
+  - env/frankasim_pickcube_vision@env.eval
+  - model/pi0_5@actor.model
+  - training_backend/fsdp@actor.fsdp_config
+  - override hydra/job_logging: stdout
+  - _self_
+
+hydra:
+  run:
+    dir: .
+  output_subdir: null
+  searchpath:
+    - file://${oc.env:EMBODIED_PATH}/config/
+
+# =============================================================================
+# 集群配置 (Cluster Configuration)
+# =============================================================================
+cluster:
+  num_nodes: 1  # 训练节点数量
+  component_placement:
+    # actor,env,rollout: 0-3 表示将 actor、env、rollout 组件放置在 GPU 0-3 上
+    actor,env,rollout: 0-3
+    # 备选配置：分离放置
+    # env: 0      # 环境在 GPU 0
+    # rollout: 0  # rollout 在 GPU 0
+    # actor: 1-3  # actor 训练在 GPU 1-3
+
+# =============================================================================
+# 训练运行器配置 (Runner Configuration)
+# =============================================================================
+runner:
+  task_type: embodied  # 任务类型：embodied(具身智能)
+  logger:
+    log_path: "../results"  # 日志保存路径
+    project_name: rlinf  # 项目名称
+    experiment_name: "franka_sim_ppo_openpi_pi05"  # 实验名称
+    logger_backends: ["tensorboard"]  # 日志后端：tensorboard/wandb/swanlab
+
+  max_epochs: 1000  # 最大训练轮数
+  max_steps: -1  # 最大训练步数 (-1 表示不使用)
+  only_eval: false  # 是否只评估不训练
+  val_check_interval: 10  # 评估间隔 (每 10 个 epoch 评估一次)
+  save_interval: 50  # 保存 checkpoint 间隔
+
+  resume_dir: null  # 恢复训练的检查点目录
+  ckpt_path: null   # 评估时加载的模型路径
+
+# =============================================================================
+# PPO 算法配置 (PPO Algorithm Configuration)
+# =============================================================================
+algorithm:
+  # 优势函数相关
+  normalize_advantages: true  # 是否归一化优势函数，稳定训练
+  adv_type: gae  # 优势计算类型：gae(广义优势估计)
+  gamma: 0.99  # 折扣因子，决定未来奖励的权重
+  gae_lambda: 0.95  # GAE 的 lambda 参数，平衡偏差和方差
+
+  # KL 散度相关
+  kl_penalty: kl  # KL 散度计算方式：kl/kl_penalty
+  kl_beta: 0.0  # KL 惩罚系数 (0 表示不使用 KL 惩罚)
+
+  # 损失函数相关
+  loss_type: actor_critic  # 损失类型：actor_critic(同时训练 actor 和 critic)
+  loss_agg_func: token-mean  # 损失聚合方式：对 token 取平均
+
+  # PPO 裁剪参数
+  clip_ratio_high: 0.2  # PPO 裁剪上界
+  clip_ratio_low: 0.2  # PPO 裁剪下界
+  clip_ratio_c: 3.0  # 双重裁剪系数 (可选)
+  value_clip: 0.2  # 价值函数裁剪阈值
+  huber_delta: 10.0  # Huber 损失的 delta 参数
+
+  # 熵相关
+  entropy_bonus: 0.005  # 熵正则化系数，鼓励探索
+  entropy_type: chunk_level  # 熵计算粒度
+
+  # 奖励相关
+  reward_coef: 1.0  # 奖励系数
+  reward_type: chunk_level  # 奖励计算粒度
+  filter_rewards: false  # 是否过滤奖励
+  rewards_lower_bound: 0.0  # 奖励下界
+  rewards_upper_bound: 1.0  # 奖励上界
+
+  # 训练轮次
+  rollout_epoch: 1  # 每个 epoch 的 rollout 次数
+  eval_rollout_epoch: 1  # 评估时的 rollout 次数
+  update_epoch: 5  # 每个 batch 的更新轮数
+
+  # 自举类型
+  bootstrap_type: always  # bootstrap 类型：standard/always
+                          # standard: 仅在 truncation 时 bootstrap
+                          # always: 在 truncation 或 termination 时都 bootstrap
+
+  # 采样参数 (生成时用)
+  sampling_params:
+    do_sample: true  # 是否采样
+    temperature_train: 1.0  # 训练时温度
+    temperature_eval: 0.6  # 评估时温度 (较低使输出更确定)
+    top_k: 50  # top-k 采样
+    top_p: 1.0  # nucleus 采样阈值
+    repetition_penalty: 1.0  # 重复惩罚
+
+    add_BOS: False  # 是否添加 BOS token
+
+  # 生成长度参数
+  length_params:
+    max_new_token: null  # 最大生成 token 数
+    max_length: 1024  # 最大序列长度
+    min_length: 1  # 最小序列长度
+
+# =============================================================================
+# 环境配置 (Environment Configuration)
+# =============================================================================
+env:
+  group_name: EnvGroup
+
+  train:
+    obs_format: tensor  # 观测格式
+    wrap_obs_mode: openpi  # 观测包装模式 (适配 openpi 模型)
+    total_num_envs: 24  # 并行环境数量 (FrankaSim 较重，不宜过多)
+    group_size: ${algorithm.group_size}  # 每组环境数
+    auto_reset: true  #  episode 结束后自动 reset
+    max_steps_per_rollout_epoch: 100  # 每个 rollout epoch 最大步数
+    max_episode_steps: 100  # 每个 episode 最大步数
+
+    use_rel_reward: true  # 使用相对奖励
+    reward_coef: ${algorithm.reward_coef}
+    is_eval: false
+
+    video_cfg:
+      save_video: false  # 训练时不保存视频以节省空间
+      info_on_video: true
+      video_base_dir: ${runner.logger.log_path}/video/train
+
+  eval:
+    obs_format: tensor
+    wrap_obs_mode: openpi
+    total_num_envs: 24  # 评估环境数
+    group_size: ${algorithm.group_size}
+    auto_reset: true
+    ignore_terminations: false  # 是否忽略终止信号
+    max_steps_per_rollout_epoch: 100
+    max_episode_steps: 100
+
+    use_rel_reward: true
+    reward_coef: ${algorithm.reward_coef}
+    is_eval: true
+
+    video_cfg:
+      save_video: true  # 评估时保存视频
+      video_base_dir: ${runner.logger.log_path}/video/eval
+
+# =============================================================================
+# Rollout 配置 (Rollout Configuration)
+# =============================================================================
+rollout:
+  group_name: RolloutGroup
+  backend: huggingface  # 生成后端：huggingface/sglang/vllm
+  enable_offload: false  # 是否启用卸载
+  pipeline_stage_num: 1  # 流水线阶段数
+  collect_prev_infos: true  # 收集前向信息用于 PPO 训练
+
+  model:
+    # SFT 预训练模型路径 (用于初始化 PPO 策略)
+    model_path: "/workspace/RLinf/weight/RLinf-Pi05-SFT"
+    precision: ${actor.model.precision}
+
+  enable_torch_compile: false  # 是否启用 torch.compile
+  enable_cuda_graph: false  # 是否启用 CUDA Graph
+
+# =============================================================================
+# Actor 模型配置 (Actor Model Configuration)
+# =============================================================================
+actor:
+  group_name: ActorGroup
+  training_backend: fsdp  # 训练后端：fsdp/megatron
+  micro_batch_size: 32  # 每个 GPU 的微批次大小
+  global_batch_size: 1024  # 全局批次大小 (必须是 micro_batch_size * world_size 的倍数)
+  seed: 0  # 随机种子
+  enable_offload: false  # 是否启用 CPU 卸载
+
+  model:
+    model_type: "openpi"  # 模型类型
+    model_path: "/workspace/RLinf/weight/RLinf-Pi05-SFT"  # 预训练模型路径
+    is_lora: false  # 是否使用 LoRA 微调
+    lora_rank: 32  # LoRA 秩
+    action_dim: 4  # 动作维度 (FrankaSim 为 7 自由度机械臂 + gripper)
+    add_value_head: true  # 添加 value head 用于 PPO
+    num_action_chunks: 1  # 动作分块数量 (与环境交互的 chunk 数)
+    num_steps: 4  # 去噪步数 (flow matching 的步数)
+
+    # OpenPI / PI05 特定参数
+    openpi:
+      # PI05 模式：state 作为离散 token 输入而非连续输入
+      pi05: true
+
+      # 配置名称 (决定数据预处理方式)
+      # pi05_franka: Franka 专用配置
+      # pi05_libero: Libero 配置
+      # pi05_maniskill: ManiSkill 配置
+      config_name: "pi05_franka"
+
+      # 是否在 VLM 后添加 value head (PI05 模式)
+      # true: value head 在 VLM 输出后
+      # false: value head 在 action expert 输出后
+      value_after_vlm: true
+
+      # 输入中的图像数量 (根据相机配置调整)
+      # front 相机: 1, wrist 相机：+1
+      num_images_in_input: 1
+
+      # 噪声方法 (flow matching 相关)
+      # flow_sde: 随机微分方程方式
+      # flow_noise: 流噪声方式 (支持联合概率计算)
+      # flow_cps: 条件路径采样方式
+      noise_method: "flow_noise"
+
+      # 噪声参数 [noise_start, noise_end, anneal_steps]
+      # 用于噪声退火策略
+      noise_params: [0.16, 0.12, 200]
+
+      # 是否使用联合概率计算 (flow_noise 模式推荐开启)
+      # true: 对所有去噪步计算联合概率
+      # false: 仅对单个去噪步计算概率
+      joint_logprob: true
+
+      # 动作时域长度 (与 action_horizon 相关)
+      # action_horizon: 8
+
+      # 以下参数已弃用 (使用上面的 num_action_chunks 和 num_steps)
+      # action_chunk: ${actor.model.num_action_chunks}
+      # num_steps: ${actor.model.num_steps}
+      # train_expert_only: true
+      # action_env_dim: ${actor.model.action_dim}
+      # add_value_head: ${actor.model.add_value_head}
+
+    # 策略设置 (决定动作空间的归一化方式)
+    # widowx_bridge: WidowX 机械臂配置
+    # panda-qpos: Franka Panda 关节位置
+    policy_setup: widowx_bridge
+
+  # 优化器配置
+  optim:
+    lr: 7.91e-6  # 主学习率 (actor)
+    value_lr: 1.55e-4  # value head 学习率 (通常更高以快速收敛)
+    adam_beta1: 0.9  # Adam beta1
+    adam_beta2: 0.95  # Adam beta2
+    adam_eps: 1.0e-08  # Adam epsilon
+    weight_decay: 0.01  # 权重衰减
+    clip_grad: 1.0  # 梯度裁剪阈值
+    critic_warmup_steps: 0  # critic warmup 步数
+
+  # FSDP 配置
+  fsdp_config:
+    strategy: fsdp
+    sharding_strategy: no_shard  # 不分片 (单节点多卡时用)
+    gradient_checkpointing: false  # 梯度检查点 (节省显存但降低速度)
+    mixed_precision:
+      param_dtype: ${actor.model.precision}
+      reduce_dtype: ${actor.model.precision}
+      buffer_dtype: ${actor.model.precision}
+
+# =============================================================================
+# 奖励和 Critic 配置 (Reward & Critic Configuration)
+# =============================================================================
+reward:
+  use_reward_model: false  # 是否使用独立奖励模型
+
+critic:
+  use_critic_model: false  # 是否使用独立 critic 模型
