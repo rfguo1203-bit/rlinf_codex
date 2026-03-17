@@ -146,7 +146,6 @@ actor:
     model_path: "/workspace/RLinf/weight/RLinf-Pi05-SFT"
     is_lora: false
     lora_rank: 32
-    action_dim: 4
     add_value_head: true
     num_action_chunks: 1
     num_steps: 4

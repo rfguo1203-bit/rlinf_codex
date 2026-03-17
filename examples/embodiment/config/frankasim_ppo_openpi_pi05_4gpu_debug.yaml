@@ -147,7 +147,6 @@ actor:
     is_lora: true
     lora_rank: 64
     lora_path: null
-    action_dim: 4
     num_action_chunks: 1
     num_steps: 3
     add_value_head: true

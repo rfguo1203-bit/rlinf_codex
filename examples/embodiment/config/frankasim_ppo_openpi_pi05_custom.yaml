@@ -189,7 +189,7 @@ actor:
     model_path: "/workspace/RLinf/weight/RLinf-Pi05-SFT"  # 预训练模型路径
     is_lora: false  # 是否使用 LoRA 微调
     lora_rank: 32  # LoRA 秩
-    action_dim: 4  # 动作维度 (FrankaSim 为 7 自由度机械臂 + gripper)
+    # 动作维度继承自 model/pi0_5.yaml，保留 7 维 canonical action，再由环境侧映射到 FrankaSim 的 4 维控制
     add_value_head: true  # 添加 value head 用于 PPO
     num_action_chunks: 1  # 动作分块数量 (与环境交互的 chunk 数)
     num_steps: 4  # 去噪步数 (flow matching 的步数)
