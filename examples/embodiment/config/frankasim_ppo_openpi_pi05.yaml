@@ -153,7 +153,7 @@ actor:
     openpi:
       # Keep Franka-specific data transforms, but use a PPO recipe close to ManiSkill Pi0.5.
       value_after_vlm: true
-      config_name: "pi0_custom"
+      config_name: "pi05_custom"
       pi05: true
       num_images_in_input: 1
       noise_method: "flow_noise"

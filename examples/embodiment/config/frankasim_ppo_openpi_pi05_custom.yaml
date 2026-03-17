@@ -200,10 +200,10 @@ actor:
       pi05: true
 
       # 配置名称 (决定数据预处理方式)
-      # pi05_franka: Franka 专用配置
+      # pi05_custom: Franka 专用配置
       # pi05_libero: Libero 配置
       # pi05_maniskill: ManiSkill 配置
-      config_name: "pi05_franka"
+      config_name: "pi05_custom"
 
       # 是否在 VLM 后添加 value head (PI05 模式)
       # true: value head 在 VLM 输出后

@@ -275,6 +275,28 @@ _CONFIGS = [
         ),
         pytorch_weight_path="checkpoints/torch/pi0_base",
     ),
+    TrainConfig(
+        name="pi05_custom",
+        model=pi0_config.Pi0Config(
+            pi05=True, action_horizon=10, discrete_state_input=False
+        ),
+        data=CustomDataConfig(
+            repo_id="physical-intelligence/custom_dataset",
+            base_config=DataConfig(
+                prompt_from_task=True
+            ),  # we need language instruction
+            assets=AssetsConfig(assets_dir="checkpoints/torch/pi05_base/assets"),
+            extra_delta_transform=False,  # True for delta action, False for abs_action
+            action_train_with_rotation_6d=False,  # User can add extra config in custom dataset
+        ),
+        batch_size=256,
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=0.999,
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "checkpoints/jax/pi05_base"
+        ),
+        pytorch_weight_path="checkpoints/torch/pi05_base",
+    ),
 ]
 
 if len({config.name for config in _CONFIGS}) != len(_CONFIGS):

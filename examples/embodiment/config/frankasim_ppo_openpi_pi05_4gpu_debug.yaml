@@ -152,7 +152,7 @@ actor:
     num_steps: 3
     add_value_head: true
     openpi:
-      config_name: "pi0_custom"
+      config_name: "pi05_custom"
       pi05: true
       num_images_in_input: 2
       noise_method: "flow_sde"
