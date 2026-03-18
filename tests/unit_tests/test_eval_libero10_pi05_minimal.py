@@ -4,12 +4,11 @@ import pathlib
 
 SCRIPT_PATH = (
     pathlib.Path(__file__).resolve().parents[2]
-    / "examples"
-    / "embodiment"
-    / "eval_libero10_pi05_minimal.py"
+    / "scripts"
+    / "simple_eval_libero10_pi05.py"
 )
 
-spec = importlib.util.spec_from_file_location("eval_libero10_pi05_minimal", SCRIPT_PATH)
+spec = importlib.util.spec_from_file_location("simple_eval_libero10_pi05", SCRIPT_PATH)
 module = importlib.util.module_from_spec(spec)
 assert spec.loader is not None
 spec.loader.exec_module(module)
@@ -26,8 +25,33 @@ def test_select_video_indices_even_spacing():
     assert indices == [0, 4, 9]
 
 
-def test_build_trial_specs_is_deterministic_and_unique():
-    trial_specs = module.build_trial_specs([2, 3], total_trials=4, shuffle_seed=0)
-    assert len(trial_specs) == 4
-    assert len(set(trial_specs)) == 4
-    assert trial_specs == [(1, 0), (0, 1), (0, 0), (1, 2)]
+def test_build_task_reset_state_ids():
+    assert module.build_task_reset_state_ids([50, 100, 150], task_id=0) == list(
+        range(0, 50)
+    )
+    assert module.build_task_reset_state_ids([50, 100, 150], task_id=2) == list(
+        range(100, 150)
+    )
+
+
+def test_choose_reset_state_ids_keeps_full_task_by_default():
+    task_reset_state_ids = [10, 11, 12]
+    assert (
+        module.choose_reset_state_ids(
+            task_reset_state_ids=task_reset_state_ids,
+            num_episodes=None,
+            shuffle=False,
+            seed=0,
+        )
+        == task_reset_state_ids
+    )
+
+
+def test_choose_reset_state_ids_shuffles_deterministically():
+    shuffled = module.choose_reset_state_ids(
+        task_reset_state_ids=[0, 1, 2, 3, 4],
+        num_episodes=3,
+        shuffle=True,
+        seed=123,
+    )
+    assert shuffled == [3, 1, 4]

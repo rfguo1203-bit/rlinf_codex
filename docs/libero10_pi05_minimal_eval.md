@@ -3,25 +3,37 @@
 最小单机单卡评测入口：
 
 ```bash
-bash examples/embodiment/eval_libero10_pi05_minimal.sh 200 0.2 0
+python scripts/simple_eval_libero10_pi05.py \
+  --model-path /path/to/RLinf-Pi05-SFT \
+  --task-id 0 \
+  --save-video-ratio 0.2 \
+  --device cuda:0
 ```
 
-含义：
+说明：
 
-- `200`：总共评测 200 个 LIBERO-10 固定初始状态
-- `0.2`：保存 20% 的 rollout 视频，即 40 个视频
-- `0`：使用第 0 张 GPU
+- `--task-id`：指定 LIBERO-10 中要评测的任务 id。
+- 默认会评测该任务的全部固定 reset states；如果需要只跑前 N 个，可以加 `--num-episodes N`。
+- `--save-video-ratio 0.2`：按比例保存 20% rollout 视频，视频索引均匀采样。
+- `--shuffle-reset-states`：如果需要，可以先打乱该 task 下的固定 reset states，再截取前 N 个。
 
-脚本会复用 `examples/embodiment/config/libero_10_ppo_openpi_pi05.yaml` 里的 OpenPI pi0.5 配置，并读取其中的 `model_path`、`action_chunk`、`num_steps`。
+这个脚本复用了正式评测链路的核心设置：
+
+- 单进程、单卡推理，不启动 Ray worker。
+- 使用 LIBERO 固定 reset states 做评测。
+- `ignore_terminations=True`，单条 rollout 默认跑满 `max_episode_steps=480`。
+- 输出 `success_once`、`success_at_end`、`return`、`episode_len`。
 
 输出位置默认在：
 
 ```text
-logs/libero10_pi05_minimal/<exp_name>/
+logs/simple_eval_libero10_pi05/task_<task_id>-<timestamp>/
 ```
 
 其中包含：
 
-- `summary.json`：汇总 `success_once`
-- `videos/`：按比例保存的视频
-- `<exp_name>.log`：完整评测日志
+- `summary.txt`：汇总指标。
+- `metrics.json`：完整评测结果。
+- `episodes.json`：逐条 rollout 结果。
+- `saved_videos.json`：保存下来的视频清单。
+- `videos/`：按比例保存的视频文件。
