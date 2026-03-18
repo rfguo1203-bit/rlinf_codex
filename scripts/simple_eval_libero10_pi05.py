@@ -24,6 +24,13 @@ ENV_CFG_PATH = (
 MODEL_CFG_PATH = (
     REPO_ROOT / "examples" / "embodiment" / "config" / "model" / "pi0_5.yaml"
 )
+MAIN_CFG_PATH = (
+    REPO_ROOT
+    / "examples"
+    / "embodiment"
+    / "config"
+    / "libero_10_ppo_openpi_pi05.yaml"
+)
 
 
 def compute_num_save_videos(num_episodes: int, save_video_ratio: float) -> int:
@@ -216,20 +223,28 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def load_main_cfg():
+    from omegaconf import OmegaConf
+
+    return OmegaConf.load(MAIN_CFG_PATH)
+
+
 def build_env_cfg(args: argparse.Namespace):
     from omegaconf import OmegaConf, open_dict
 
     env_cfg = OmegaConf.load(ENV_CFG_PATH)
+    main_cfg = load_main_cfg()
+    default_max_episode_steps = int(main_cfg.env.eval.max_episode_steps)
     with open_dict(env_cfg):
         env_cfg.total_num_envs = 1
         env_cfg.auto_reset = False
-        env_cfg.ignore_terminations = True
-        env_cfg.max_episode_steps = args.max_episode_steps
-        env_cfg.max_steps_per_rollout_epoch = args.max_episode_steps
-        env_cfg.use_fixed_reset_state_ids = True
+        env_cfg.ignore_terminations = bool(main_cfg.env.eval.ignore_terminations)
+        env_cfg.max_episode_steps = args.max_episode_steps or default_max_episode_steps
+        env_cfg.max_steps_per_rollout_epoch = env_cfg.max_episode_steps
+        env_cfg.use_fixed_reset_state_ids = bool(main_cfg.env.eval.use_fixed_reset_state_ids)
         env_cfg.use_ordered_reset_state_ids = False
-        env_cfg.is_eval = True
-        env_cfg.group_size = 1
+        env_cfg.is_eval = bool(main_cfg.env.eval.is_eval)
+        env_cfg.group_size = int(main_cfg.env.eval.group_size)
         env_cfg.seed = args.seed
         env_cfg.video_cfg.save_video = True
         env_cfg.video_cfg.info_on_video = True
@@ -244,6 +259,7 @@ def build_model_cfg(args: argparse.Namespace):
     from omegaconf import OmegaConf, open_dict
 
     model_cfg = OmegaConf.load(MODEL_CFG_PATH)
+    main_cfg = load_main_cfg()
     num_action_chunks = (
         args.num_action_chunks
         if args.num_action_chunks is not None
@@ -253,11 +269,14 @@ def build_model_cfg(args: argparse.Namespace):
         model_cfg.model_type = "openpi"
         model_cfg.model_path = args.model_path
         model_cfg.is_lora = False
-        model_cfg.add_value_head = False
+        model_cfg.add_value_head = bool(main_cfg.actor.model.add_value_head)
         model_cfg.num_action_chunks = num_action_chunks
         model_cfg.openpi.config_name = "pi05_libero"
         model_cfg.openpi.action_chunk = num_action_chunks
-        model_cfg.openpi.add_value_head = False
+        model_cfg.openpi.num_steps = int(model_cfg.num_steps)
+        model_cfg.openpi.action_env_dim = int(model_cfg.action_dim)
+        model_cfg.openpi.add_value_head = bool(model_cfg.add_value_head)
+        model_cfg.openpi.value_after_vlm = bool(main_cfg.actor.model.openpi.value_after_vlm)
     return model_cfg
 
 
