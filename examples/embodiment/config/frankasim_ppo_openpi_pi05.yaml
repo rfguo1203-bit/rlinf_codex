@@ -154,7 +154,7 @@ actor:
       value_after_vlm: true
       config_name: "pi05_custom"
       pi05: true
-      num_images_in_input: 1
+      num_images_in_input: 2
       noise_method: "flow_noise"
       noise_params: [0.16, 0.12, 200]
       joint_logprob: true

@@ -92,23 +92,29 @@ class FrankaEEInputs(transforms.DataTransformFn):
         state = transforms.pad_to_dim(state, self.action_dim)
 
         base_image = _parse_image(data["observation/image"])
+        wrist_image = (
+            _parse_image(data["observation/wrist_image"])
+            if "observation/wrist_image" in data
+            else np.zeros_like(base_image)
+        )
+        has_wrist_image = "observation/wrist_image" in data
 
         # We only mask padding for pi0 model, not pi0-FAST.
         if self.model_type == _model.ModelType.PI0:
             names = ("base_0_rgb", "left_wrist_0_rgb", "right_wrist_0_rgb")
             images = (
                 base_image,
-                np.zeros_like(base_image),
+                wrist_image,
                 np.zeros_like(base_image),
             )
-            image_masks = (np.True_, np.False_, np.False_)  # with padding
+            image_masks = (np.True_, np.bool_(has_wrist_image), np.False_)
         elif self.model_type == _model.ModelType.PI0_FAST:
             names = ("base_0_rgb", "base_1_rgb", "wrist_0_rgb")
             # We don't mask out padding images for FAST models.
             images = (
                 base_image,
                 np.zeros_like(base_image),
-                np.zeros_like(base_image),
+                wrist_image,
             )
             image_masks = (np.True_, np.True_, np.True_)  # without padding
         else:

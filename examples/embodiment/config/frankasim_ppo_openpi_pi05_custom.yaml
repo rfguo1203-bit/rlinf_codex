@@ -212,7 +212,7 @@ actor:
 
       # 输入中的图像数量 (根据相机配置调整)
       # front 相机: 1, wrist 相机：+1
-      num_images_in_input: 1
+      num_images_in_input: 2
 
       # 噪声方法 (flow matching 相关)
       # flow_sde: 随机微分方程方式
