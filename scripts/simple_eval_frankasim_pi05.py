@@ -90,6 +90,12 @@ def config_root() -> Path:
 def _extract_default_name(main_cfg: DictConfig, prefix: str, target: str) -> str:
     defaults = OmegaConf.to_container(main_cfg.get("defaults", []), resolve=False)
     for entry in defaults:
+        if isinstance(entry, str):
+            if "@" not in entry:
+                continue
+            key, value = entry.split("@", 1)
+            if key.startswith(prefix) and value == target:
+                return key.split("/", 1)[1]
         if isinstance(entry, dict):
             for key, value in entry.items():
                 if (
