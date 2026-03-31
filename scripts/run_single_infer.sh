@@ -1,9 +1,38 @@
-cd /Users/rkos/Workspace/RLinf
+#!/bin/bash
 
-python scripts/infer_libero10_pi05_single_task.py --list-tasks
+set -euo pipefail
 
-python scripts/infer_libero10_pi05_single_task.py \
+REPO_PATH="/workspace/RLinf"
+MODEL_PATH="/workspace/RLinf/weight/RLinf-Pi05-SFT"
+OUTPUT_DIR="/workspace/RLinf/outputs"
+
+cd "${REPO_PATH}"
+
+if [[ "${1:-}" == "--list-tasks" ]]; then
+  python scripts/simple_eval_libero10_pi05.py --list-tasks
+  exit 0
+fi
+
+if [[ "${1:-}" =~ ^[0-9]+$ ]]; then
+  python scripts/simple_eval_libero10_pi05.py \
+    --task-id "$1" \
+    --model-path "${MODEL_PATH}" \
+    --output-dir "${OUTPUT_DIR}" \
+    --num-episodes "${2:-1}"
+  exit 0
+fi
+
+if [[ -n "${1:-}" ]]; then
+  python scripts/simple_eval_libero10_pi05.py \
+    --task-name "$1" \
+    --model-path "${MODEL_PATH}" \
+    --output-dir "${OUTPUT_DIR}" \
+    --num-episodes "${2:-1}"
+  exit 0
+fi
+
+python scripts/simple_eval_libero10_pi05.py \
   --task-id 0 \
-  --model-path /你的/pi05模型目录 \
-  --output-dir /Users/rkos/Workspace/RLinf/results/libero10_pi05_demo \
+  --model-path "${MODEL_PATH}" \
+  --output-dir "${OUTPUT_DIR}" \
   --num-episodes 1

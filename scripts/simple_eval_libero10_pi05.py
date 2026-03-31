@@ -21,6 +21,7 @@ import argparse
 import copy
 import os
 import random
+import re
 from itertools import accumulate
 from pathlib import Path
 from typing import Any
@@ -139,6 +140,53 @@ def load_libero10_metadata(task_suite_name: str = "libero_10") -> dict[str, Any]
         "trial_counts": trial_counts,
         "cumsum_trial_id_bins": cumsum_trial_id_bins,
     }
+
+
+def normalize_task_name(task_name: str) -> str:
+    """Normalize common separators and whitespace for task matching."""
+    normalized = re.sub(r"[_\-]+", " ", task_name.strip().lower())
+    normalized = re.sub(r"\s+", " ", normalized)
+    return normalized
+
+
+def resolve_task_id(
+    task_descriptions: list[str],
+    task_id: int | None = None,
+    task_name: str | None = None,
+) -> int:
+    """Resolve a LIBERO-10 task from either id or language description."""
+    if task_id is not None:
+        if task_id < 0 or task_id >= len(task_descriptions):
+            raise ValueError(
+                f"task_id must be in [0, {len(task_descriptions) - 1}], got {task_id}"
+            )
+        return task_id
+
+    if not task_name:
+        raise ValueError("Either task_id or task_name must be provided.")
+
+    normalized_query = normalize_task_name(task_name)
+    normalized_descriptions = [
+        normalize_task_name(description) for description in task_descriptions
+    ]
+
+    for idx, normalized_description in enumerate(normalized_descriptions):
+        if normalized_description == normalized_query:
+            return idx
+
+    substring_matches = [
+        idx
+        for idx, normalized_description in enumerate(normalized_descriptions)
+        if normalized_query in normalized_description
+    ]
+    if len(substring_matches) == 1:
+        return substring_matches[0]
+    if len(substring_matches) > 1:
+        raise ValueError(
+            "Matched multiple tasks by substring. Please use a more specific task_name."
+        )
+
+    raise ValueError(f"Could not find a LIBERO-10 task matching: {task_name}")
 
 
 def _to_bool(value: Any) -> bool:
@@ -340,7 +388,23 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Evaluate Pi0.5 on a single LIBERO-10 task and save videos."
     )
-    parser.add_argument("--task-id", type=int, required=True, help="LIBERO-10 task id.")
+    parser.add_argument(
+        "--task-id",
+        type=int,
+        default=None,
+        help="LIBERO-10 task id.",
+    )
+    parser.add_argument(
+        "--task-name",
+        type=str,
+        default=None,
+        help="LIBERO-10 task language description or unique substring.",
+    )
+    parser.add_argument(
+        "--list-tasks",
+        action="store_true",
+        help="Print all LIBERO-10 task ids and descriptions, then exit.",
+    )
     parser.add_argument(
         "--config-name",
         type=str,
@@ -387,8 +451,20 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     args = _build_parser().parse_args()
-    results = run_single_task_eval(
+    metadata = load_libero10_metadata()
+
+    if args.list_tasks:
+        for idx, description in enumerate(metadata["task_descriptions"]):
+            print(f"{idx}: {description}")
+        return
+
+    selected_task_id = resolve_task_id(
+        task_descriptions=metadata["task_descriptions"],
         task_id=args.task_id,
+        task_name=args.task_name,
+    )
+    results = run_single_task_eval(
+        task_id=selected_task_id,
         config_name=args.config_name,
         model_path=args.model_path,
         output_dir=args.output_dir,
