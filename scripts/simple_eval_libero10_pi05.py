@@ -22,6 +22,7 @@ import copy
 import os
 import random
 import re
+import secrets
 from itertools import accumulate
 from pathlib import Path
 from typing import Any
@@ -204,6 +205,26 @@ def _predict_video_path(video_base_dir: Path, seed: int, task_dir: str, video_id
     return video_base_dir / f"seed_{seed}" / task_dir / f"{video_idx}.mp4"
 
 
+def _resolve_seed(seed: int | None) -> int:
+    """Use the provided seed or generate a random one when absent."""
+    return seed if seed is not None else secrets.randbelow(2**31)
+
+
+def _get_next_video_index(video_base_dir: Path, seed: int, task_dir: str) -> int:
+    """Return the next non-overlapping MP4 index for the target task directory."""
+    task_video_dir = video_base_dir / f"seed_{seed}" / task_dir
+    if not task_video_dir.exists():
+        return 0
+
+    existing_indices: list[int] = []
+    for mp4_path in task_video_dir.glob("*.mp4"):
+        try:
+            existing_indices.append(int(mp4_path.stem))
+        except ValueError:
+            continue
+    return max(existing_indices, default=-1) + 1
+
+
 def _standardize_env_obs(obs: dict[str, Any]) -> dict[str, Any]:
     """Match the observation schema produced by the standard eval pipeline.
 
@@ -234,7 +255,7 @@ def run_single_task_eval(
     output_dir: str | None = None,
     num_episodes: int | None = 1,
     shuffle: bool = False,
-    seed: int = 0,
+    seed: int | None = None,
     save_fraction: float = 1.0,
 ) -> dict[str, Any]:
     """Run a single-task LIBERO-10 evaluation loop without Ray workers."""
@@ -253,6 +274,7 @@ def run_single_task_eval(
             f"task_id must be in [0, {len(task_descriptions) - 1}], got {task_id}"
         )
 
+    resolved_seed = _resolve_seed(seed)
     task_name = task_descriptions[task_id]
     task_slug = _slugify_task_name(task_name)
     task_reset_state_ids = build_task_reset_state_ids(
@@ -263,7 +285,7 @@ def run_single_task_eval(
         task_reset_state_ids=task_reset_state_ids,
         num_episodes=num_episodes,
         shuffle=shuffle,
-        seed=seed,
+        seed=resolved_seed,
     )
     if not chosen_reset_state_ids:
         raise ValueError("No reset states selected for evaluation.")
@@ -288,7 +310,7 @@ def run_single_task_eval(
         cfg.env.eval.auto_reset = False
         cfg.env.eval.ignore_terminations = False
         cfg.env.eval.use_fixed_reset_state_ids = False
-        cfg.env.eval.seed = seed
+        cfg.env.eval.seed = resolved_seed
         cfg.env.eval.video_cfg.save_video = bool(save_video_indices)
         cfg.env.eval.video_cfg.video_base_dir = str(video_base_dir)
 
@@ -310,6 +332,11 @@ def run_single_task_eval(
 
     episode_results: list[dict[str, Any]] = []
     saved_video_paths: list[str] = []
+    next_video_index = _get_next_video_index(
+        video_base_dir=video_base_dir,
+        seed=resolved_seed,
+        task_dir=task_slug,
+    )
 
     try:
         for episode_idx, reset_state_id in enumerate(chosen_reset_state_ids):
@@ -352,13 +379,15 @@ def run_single_task_eval(
 
             video_path = None
             if episode_idx in save_video_indices and isinstance(env, RecordVideo):
+                env.video_cnt = next_video_index
                 video_path = _predict_video_path(
                     video_base_dir=video_base_dir,
-                    seed=env.seed,
+                    seed=resolved_seed,
                     task_dir=task_slug,
                     video_idx=env.video_cnt,
                 )
                 env.flush_video(video_sub_dir=task_slug)
+                next_video_index = env.video_cnt
                 saved_video_paths.append(str(video_path))
 
             episode_results.append(
@@ -378,6 +407,7 @@ def run_single_task_eval(
     return {
         "task_id": task_id,
         "task_name": task_name,
+        "seed": resolved_seed,
         "episodes": episode_results,
         "saved_video_paths": saved_video_paths,
         "video_base_dir": str(video_base_dir),
@@ -437,8 +467,8 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--seed",
         type=int,
-        default=0,
-        help="Random seed used for env selection and shuffle.",
+        default=None,
+        help="Optional seed used for env selection and shuffle. Defaults to a random seed.",
     )
     parser.add_argument(
         "--save-fraction",
@@ -474,7 +504,7 @@ def main() -> None:
         save_fraction=args.save_fraction,
     )
 
-    print(f"Task {results['task_id']}: {results['task_name']}")
+    print(f"Task {results['task_id']}: {results['task_name']} (seed={results['seed']})")
     for episode in results["episodes"]:
         print(
             "Episode "
