@@ -22,3 +22,4 @@ PKG-INFO
 external_deps
 temp
 
+*.egg-info/
