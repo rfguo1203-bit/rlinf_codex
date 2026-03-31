@@ -13,6 +13,7 @@ SHUFFLE="false"
 VLM_CHECK_INTERVAL="0"
 VLM_API_URL=""
 VLM_API_KEY=""
+VLM_X_AUTH_TOKEN="abcd1234"
 VLM_MODEL=""
 VLM_PROMPT='You are judging whether a robot manipulation task is already complete from a single camera image. Reply with strict JSON only: {"terminate": true/false, "reason": "short reason"}. Set terminate=true only when the task goal is clearly finished in the image.'
 VLM_TIMEOUT="30"
@@ -58,6 +59,10 @@ fi
 
 if [[ -n "${VLM_API_KEY}" ]]; then
   ARGS+=(--vlm-api-key "${VLM_API_KEY}")
+fi
+
+if [[ -n "${VLM_X_AUTH_TOKEN}" ]]; then
+  ARGS+=(--vlm-x-auth-token "${VLM_X_AUTH_TOKEN}")
 fi
 
 if [[ -n "${VLM_MODEL}" ]]; then

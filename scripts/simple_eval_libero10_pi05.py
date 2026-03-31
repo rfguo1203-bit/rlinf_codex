@@ -329,6 +329,7 @@ def _parse_vlm_decision(response_payload: dict[str, Any]) -> dict[str, Any]:
 def _query_vlm_termination(
     api_url: str,
     api_key: str,
+    x_auth_token: str | None,
     model_name: str,
     prompt: str,
     image: Any,
@@ -356,10 +357,11 @@ def _query_vlm_termination(
         headers={
             "Content-Type": "application/json",
             "Authorization": f"Bearer {api_key}",
-            "x-auth-token": "abcd1234",
         },
         method="POST",
     )
+    if x_auth_token:
+        request.add_header("x-auth-token", x_auth_token)
     try:
         with urllib.request.urlopen(
             request,
@@ -390,6 +392,7 @@ def run_single_task_eval(
     vlm_check_interval: int = 0,
     vlm_api_url: str | None = None,
     vlm_api_key: str | None = None,
+    vlm_x_auth_token: str | None = None,
     vlm_model: str | None = None,
     vlm_prompt: str = DEFAULT_VLM_PROMPT,
     vlm_timeout: float = 30.0,
@@ -543,6 +546,7 @@ def run_single_task_eval(
                         vlm_decision = _query_vlm_termination(
                             api_url=vlm_api_url,
                             api_key=vlm_api_key,
+                            x_auth_token=vlm_x_auth_token,
                             model_name=vlm_model,
                             prompt=task_prompt,
                             image=base_image,
@@ -690,6 +694,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Model name sent to the VLM endpoint.",
     )
     parser.add_argument(
+        "--vlm-x-auth-token",
+        type=str,
+        default=None,
+        help="Optional x-auth-token header used by the VLM endpoint.",
+    )
+    parser.add_argument(
         "--vlm-prompt",
         type=str,
         default=DEFAULT_VLM_PROMPT,
@@ -730,6 +740,7 @@ def main() -> None:
         vlm_check_interval=args.vlm_check_interval,
         vlm_api_url=args.vlm_api_url,
         vlm_api_key=args.vlm_api_key,
+        vlm_x_auth_token=args.vlm_x_auth_token,
         vlm_model=args.vlm_model,
         vlm_prompt=args.vlm_prompt,
         vlm_timeout=args.vlm_timeout,
