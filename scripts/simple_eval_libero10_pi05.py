@@ -356,6 +356,7 @@ def _query_vlm_termination(
         headers={
             "Content-Type": "application/json",
             "Authorization": f"Bearer {api_key}",
+            "x-auth-token": "abcd1234",
         },
         method="POST",
     )
