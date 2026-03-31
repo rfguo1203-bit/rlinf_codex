@@ -368,7 +368,22 @@ def _query_vlm_termination(
             timeout=timeout,
             context=ssl.create_default_context(),
         ) as response:
-            response_payload = json.loads(response.read().decode("utf-8"))
+            response_bytes = response.read()
+            response_text = response_bytes.decode("utf-8", errors="replace").strip()
+            if not response_text:
+                raise RuntimeError(
+                    "VLM response body is empty. "
+                    f"content_type={response.headers.get('Content-Type')!r}"
+                )
+            try:
+                response_payload = json.loads(response_text)
+            except json.JSONDecodeError as exc:
+                response_preview = response_text[:500]
+                raise RuntimeError(
+                    "VLM response is not valid JSON. "
+                    f"content_type={response.headers.get('Content-Type')!r}, "
+                    f"body_preview={response_preview!r}"
+                ) from exc
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")
         raise RuntimeError(
