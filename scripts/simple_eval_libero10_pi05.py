@@ -156,6 +156,29 @@ def _predict_video_path(video_base_dir: Path, seed: int, task_dir: str, video_id
     return video_base_dir / f"seed_{seed}" / task_dir / f"{video_idx}.mp4"
 
 
+def _standardize_env_obs(obs: dict[str, Any]) -> dict[str, Any]:
+    """Match the observation schema produced by the standard eval pipeline.
+
+    The official `eval_embodiment.sh` path goes through `EnvOutput.to_dict()`,
+    which normalizes observations with `EnvOutput.prepare_observations()`.
+    This helper mirrors that behavior so the standalone script can feed the
+    model the same key set, including optional keys with `None` defaults.
+    """
+    return {
+        "main_images": obs["main_images"] if "main_images" in obs else None,
+        "wrist_images": obs["wrist_images"] if "wrist_images" in obs else None,
+        "extra_view_images": (
+            obs["extra_view_images"] if "extra_view_images" in obs else None
+        ),
+        "states": obs["states"] if "states" in obs else None,
+        "task_descriptions": (
+            list(obs["task_descriptions"])
+            if "task_descriptions" in obs and obs["task_descriptions"] is not None
+            else None
+        ),
+    }
+
+
 def run_single_task_eval(
     task_id: int,
     config_name: str = DEFAULT_CONFIG_NAME,
@@ -244,6 +267,7 @@ def run_single_task_eval(
         for episode_idx, reset_state_id in enumerate(chosen_reset_state_ids):
             env.is_start = False
             obs, _ = env.reset(reset_state_ids=[reset_state_id])
+            obs = _standardize_env_obs(obs)
 
             done = False
             success = False
@@ -268,6 +292,7 @@ def run_single_task_eval(
                 for chunk_step in range(chunk_actions.shape[1]):
                     action = chunk_actions[:, chunk_step]
                     obs, _reward, terminations, truncations, _infos = env.step(action)
+                    obs = _standardize_env_obs(obs)
                     episode_steps += 1
 
                     terminated = _to_bool(terminations[0])
