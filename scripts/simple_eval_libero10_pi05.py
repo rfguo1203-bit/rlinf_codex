@@ -348,6 +348,7 @@ def _query_vlm_termination(
                 ],
             }
         ],
+        "stream": False,
         "response_format": {"type": "json_object"},
     }
     request_bytes = json.dumps(request_body).encode("utf-8")
