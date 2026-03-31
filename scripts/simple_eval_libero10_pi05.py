@@ -33,6 +33,8 @@ from itertools import accumulate
 from pathlib import Path
 from typing import Any
 
+from tqdm.auto import tqdm
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 EMBODIED_PATH = REPO_ROOT / "examples" / "embodiment"
@@ -510,78 +512,87 @@ def run_single_task_eval(
             termination_source = "env"
             termination_reason = ""
             vlm_checks: list[dict[str, Any]] = []
+            progress_bar = tqdm(
+                total=env_cfg.max_episode_steps,
+                desc=f"Episode {episode_idx}",
+                leave=False,
+            )
 
-            while not done and episode_steps < env_cfg.max_episode_steps:
-                raw_chunk_actions, _ = model.predict_action_batch(
-                    env_obs=obs,
-                    mode="eval",
-                    compute_values=False,
-                )
-                chunk_actions = prepare_actions(
-                    raw_chunk_actions=raw_chunk_actions,
-                    env_type=env_cfg.env_type,
-                    model_type=model_cfg.model_type,
-                    num_action_chunks=model_cfg.num_action_chunks,
-                    action_dim=model_cfg.action_dim,
-                    policy=model_cfg.get("policy_setup", None),
-                    wm_env_type=env_cfg.get("wm_env_type", None),
-                )
-
-                for chunk_step in range(chunk_actions.shape[1]):
-                    action = chunk_actions[:, chunk_step]
-                    obs, _reward, terminations, truncations, _infos = env.step(action)
-                    obs = _standardize_env_obs(obs)
-                    episode_steps += 1
-
-                    terminated = _to_bool(terminations[0])
-                    truncated = _to_bool(truncations[0])
-                    done = terminated or truncated
-                    success = success or terminated
-                    if terminated:
-                        termination_source = "env"
-                    elif truncated:
-                        termination_source = "truncation"
-
-                    should_check_vlm = (
-                        vlm_enabled
-                        and not done
-                        and episode_steps > 0
-                        and episode_steps % vlm_check_interval == 0
+            try:
+                while not done and episode_steps < env_cfg.max_episode_steps:
+                    raw_chunk_actions, _ = model.predict_action_batch(
+                        env_obs=obs,
+                        mode="eval",
+                        compute_values=False,
                     )
-                    if should_check_vlm:
-                        base_image = _extract_base_image(obs)
-                        if base_image is None:
-                            raise ValueError(
-                                "VLM termination check requires obs['main_images'] to exist."
+                    chunk_actions = prepare_actions(
+                        raw_chunk_actions=raw_chunk_actions,
+                        env_type=env_cfg.env_type,
+                        model_type=model_cfg.model_type,
+                        num_action_chunks=model_cfg.num_action_chunks,
+                        action_dim=model_cfg.action_dim,
+                        policy=model_cfg.get("policy_setup", None),
+                        wm_env_type=env_cfg.get("wm_env_type", None),
+                    )
+
+                    for chunk_step in range(chunk_actions.shape[1]):
+                        action = chunk_actions[:, chunk_step]
+                        obs, _reward, terminations, truncations, _infos = env.step(action)
+                        obs = _standardize_env_obs(obs)
+                        episode_steps += 1
+                        progress_bar.update(1)
+
+                        terminated = _to_bool(terminations[0])
+                        truncated = _to_bool(truncations[0])
+                        done = terminated or truncated
+                        success = success or terminated
+                        if terminated:
+                            termination_source = "env"
+                        elif truncated:
+                            termination_source = "truncation"
+
+                        should_check_vlm = (
+                            vlm_enabled
+                            and not done
+                            and episode_steps > 0
+                            and episode_steps % vlm_check_interval == 0
+                        )
+                        if should_check_vlm:
+                            base_image = _extract_base_image(obs)
+                            if base_image is None:
+                                raise ValueError(
+                                    "VLM termination check requires obs['main_images'] to exist."
+                                )
+                            task_prompt = (
+                                f"{vlm_prompt}\n"
+                                f"Task: {task_name}\n"
+                                "Judge based only on the provided base camera image."
                             )
-                        task_prompt = (
-                            f"{vlm_prompt}\n"
-                            f"Task: {task_name}\n"
-                            "Judge based only on the provided base camera image."
-                        )
-                        vlm_decision = _query_vlm_termination(
-                            api_url=vlm_api_url,
-                            api_key=vlm_api_key,
-                            x_auth_token=vlm_x_auth_token,
-                            model_name=vlm_model,
-                            prompt=task_prompt,
-                            image=base_image,
-                            timeout=vlm_timeout,
-                        )
-                        vlm_record = {
-                            "step": episode_steps,
-                            "terminate": vlm_decision["terminate"],
-                            "reason": vlm_decision["reason"],
-                            "raw_text": vlm_decision["raw_text"],
-                        }
-                        vlm_checks.append(vlm_record)
-                        if vlm_decision["terminate"]:
-                            done = True
-                            success = True
-                            termination_source = "vlm"
-                            termination_reason = vlm_decision["reason"]
-                    if done:
-                        break
+                            vlm_decision = _query_vlm_termination(
+                                api_url=vlm_api_url,
+                                api_key=vlm_api_key,
+                                x_auth_token=vlm_x_auth_token,
+                                model_name=vlm_model,
+                                prompt=task_prompt,
+                                image=base_image,
+                                timeout=vlm_timeout,
+                            )
+                            vlm_record = {
+                                "step": episode_steps,
+                                "terminate": vlm_decision["terminate"],
+                                "reason": vlm_decision["reason"],
+                                "raw_text": vlm_decision["raw_text"],
+                            }
+                            vlm_checks.append(vlm_record)
+                            if vlm_decision["terminate"]:
+                                done = True
+                                success = True
+                                termination_source = "vlm"
+                                termination_reason = vlm_decision["reason"]
+                        if done:
+                            break
+            finally:
+                progress_bar.close()
 
             video_path = None
             if episode_idx in save_video_indices and isinstance(env, RecordVideo):
