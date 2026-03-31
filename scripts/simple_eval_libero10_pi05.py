@@ -18,11 +18,17 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import copy
+import io
+import json
 import os
 import random
 import re
 import secrets
+import ssl
+import urllib.error
+import urllib.request
 from itertools import accumulate
 from pathlib import Path
 from typing import Any
@@ -31,6 +37,12 @@ from typing import Any
 REPO_ROOT = Path(__file__).resolve().parents[1]
 EMBODIED_PATH = REPO_ROOT / "examples" / "embodiment"
 DEFAULT_CONFIG_NAME = "libero_10_ppo_openpi_pi05"
+DEFAULT_VLM_PROMPT = (
+    "You are judging whether a robot manipulation task is already complete from a single "
+    "camera image. Reply with strict JSON only: "
+    '{"terminate": true/false, "reason": "short reason"}. '
+    "Set terminate=true only when the task goal is clearly finished in the image."
+)
 
 
 def compute_num_save_videos(total_episodes: int, save_fraction: float) -> int:
@@ -248,6 +260,123 @@ def _standardize_env_obs(obs: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _extract_base_image(obs: dict[str, Any]) -> Any:
+    """Return the first environment's main camera image."""
+    main_images = obs.get("main_images")
+    if main_images is None:
+        return None
+    try:
+        return main_images[0]
+    except (IndexError, TypeError):
+        return main_images
+
+
+def _encode_image_to_data_url(image: Any) -> str:
+    """Encode an observation image into a PNG data URL."""
+    from PIL import Image
+
+    image_array = image
+    if hasattr(image_array, "detach"):
+        image_array = image_array.detach().cpu().numpy()
+    elif hasattr(image_array, "cpu") and hasattr(image_array, "numpy"):
+        image_array = image_array.cpu().numpy()
+
+    image_pil = Image.fromarray(image_array)
+    image_buffer = io.BytesIO()
+    image_pil.save(image_buffer, format="PNG")
+    image_b64 = base64.b64encode(image_buffer.getvalue()).decode("utf-8")
+    return f"data:image/png;base64,{image_b64}"
+
+
+def _parse_vlm_decision(response_payload: dict[str, Any]) -> dict[str, Any]:
+    """Parse an OpenAI-compatible VLM response into a terminate decision."""
+    content: Any = None
+
+    if isinstance(response_payload.get("output"), list):
+        text_parts: list[str] = []
+        for output_item in response_payload["output"]:
+            for content_item in output_item.get("content", []):
+                if content_item.get("type") in {"output_text", "text"}:
+                    text_parts.append(content_item.get("text", ""))
+        if text_parts:
+            content = "\n".join(part for part in text_parts if part)
+
+    if content is None:
+        choices = response_payload.get("choices", [])
+        if choices:
+            message = choices[0].get("message", {})
+            content = message.get("content")
+
+    if isinstance(content, list):
+        text_parts = []
+        for item in content:
+            if isinstance(item, dict) and item.get("type") == "text":
+                text_parts.append(item.get("text", ""))
+        content = "\n".join(part for part in text_parts if part)
+
+    if not isinstance(content, str) or not content.strip():
+        raise ValueError("VLM response did not contain parsable text content.")
+
+    content = content.strip()
+    json_match = re.search(r"\{.*\}", content, flags=re.DOTALL)
+    json_text = json_match.group(0) if json_match else content
+    decision = json.loads(json_text)
+    terminate = bool(decision.get("terminate", False))
+    reason = str(decision.get("reason", "")).strip()
+    return {"terminate": terminate, "reason": reason, "raw_text": content}
+
+
+def _query_vlm_termination(
+    api_url: str,
+    api_key: str,
+    model_name: str,
+    prompt: str,
+    image: Any,
+    timeout: float,
+) -> dict[str, Any]:
+    """Call an OpenAI-compatible VLM endpoint and return the termination decision."""
+    image_data_url = _encode_image_to_data_url(image)
+    request_body = {
+        "model": model_name,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": image_data_url}},
+                ],
+            }
+        ],
+        "response_format": {"type": "json_object"},
+    }
+    request_bytes = json.dumps(request_body).encode("utf-8")
+    request = urllib.request.Request(
+        api_url,
+        data=request_bytes,
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(
+            request,
+            timeout=timeout,
+            context=ssl.create_default_context(),
+        ) as response:
+            response_payload = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(
+            f"VLM request failed with HTTP {exc.code}: {body}"
+        ) from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"VLM request failed: {exc.reason}") from exc
+
+    return _parse_vlm_decision(response_payload)
+
+
 def run_single_task_eval(
     task_id: int,
     config_name: str = DEFAULT_CONFIG_NAME,
@@ -257,6 +386,12 @@ def run_single_task_eval(
     shuffle: bool = False,
     seed: int | None = None,
     save_fraction: float = 1.0,
+    vlm_check_interval: int = 0,
+    vlm_api_url: str | None = None,
+    vlm_api_key: str | None = None,
+    vlm_model: str | None = None,
+    vlm_prompt: str = DEFAULT_VLM_PROMPT,
+    vlm_timeout: float = 30.0,
 ) -> dict[str, Any]:
     """Run a single-task LIBERO-10 evaluation loop without Ray workers."""
     from omegaconf import open_dict
@@ -337,6 +472,11 @@ def run_single_task_eval(
         seed=resolved_seed,
         task_dir=task_slug,
     )
+    vlm_enabled = vlm_check_interval > 0
+    if vlm_enabled and (not vlm_api_url or not vlm_api_key or not vlm_model):
+        raise ValueError(
+            "When vlm_check_interval > 0, vlm_api_url, vlm_api_key, and vlm_model are required."
+        )
 
     try:
         for episode_idx, reset_state_id in enumerate(chosen_reset_state_ids):
@@ -347,6 +487,9 @@ def run_single_task_eval(
             done = False
             success = False
             episode_steps = 0
+            termination_source = "env"
+            termination_reason = ""
+            vlm_checks: list[dict[str, Any]] = []
 
             while not done and episode_steps < env_cfg.max_episode_steps:
                 raw_chunk_actions, _ = model.predict_action_batch(
@@ -374,6 +517,48 @@ def run_single_task_eval(
                     truncated = _to_bool(truncations[0])
                     done = terminated or truncated
                     success = success or terminated
+                    if terminated:
+                        termination_source = "env"
+                    elif truncated:
+                        termination_source = "truncation"
+
+                    should_check_vlm = (
+                        vlm_enabled
+                        and not done
+                        and episode_steps > 0
+                        and episode_steps % vlm_check_interval == 0
+                    )
+                    if should_check_vlm:
+                        base_image = _extract_base_image(obs)
+                        if base_image is None:
+                            raise ValueError(
+                                "VLM termination check requires obs['main_images'] to exist."
+                            )
+                        task_prompt = (
+                            f"{vlm_prompt}\n"
+                            f"Task: {task_name}\n"
+                            "Judge based only on the provided base camera image."
+                        )
+                        vlm_decision = _query_vlm_termination(
+                            api_url=vlm_api_url,
+                            api_key=vlm_api_key,
+                            model_name=vlm_model,
+                            prompt=task_prompt,
+                            image=base_image,
+                            timeout=vlm_timeout,
+                        )
+                        vlm_record = {
+                            "step": episode_steps,
+                            "terminate": vlm_decision["terminate"],
+                            "reason": vlm_decision["reason"],
+                            "raw_text": vlm_decision["raw_text"],
+                        }
+                        vlm_checks.append(vlm_record)
+                        if vlm_decision["terminate"]:
+                            done = True
+                            success = True
+                            termination_source = "vlm"
+                            termination_reason = vlm_decision["reason"]
                     if done:
                         break
 
@@ -398,6 +583,9 @@ def run_single_task_eval(
                     "reset_state_id": reset_state_id,
                     "success": success,
                     "steps": episode_steps,
+                    "termination_source": termination_source,
+                    "termination_reason": termination_reason,
+                    "vlm_checks": vlm_checks,
                     "video_path": str(video_path) if video_path is not None else None,
                 }
             )
@@ -476,6 +664,42 @@ def _build_parser() -> argparse.ArgumentParser:
         default=1.0,
         help="Fraction of evaluated episodes to export as videos.",
     )
+    parser.add_argument(
+        "--vlm-check-interval",
+        type=int,
+        default=0,
+        help="Run one VLM termination check every k env steps. Set 0 to disable.",
+    )
+    parser.add_argument(
+        "--vlm-api-url",
+        type=str,
+        default=None,
+        help="OpenAI-compatible VLM endpoint URL, for example /v1/chat/completions.",
+    )
+    parser.add_argument(
+        "--vlm-api-key",
+        type=str,
+        default=None,
+        help="API key used for the VLM endpoint.",
+    )
+    parser.add_argument(
+        "--vlm-model",
+        type=str,
+        default=None,
+        help="Model name sent to the VLM endpoint.",
+    )
+    parser.add_argument(
+        "--vlm-prompt",
+        type=str,
+        default=DEFAULT_VLM_PROMPT,
+        help="Prompt template used for VLM termination checks.",
+    )
+    parser.add_argument(
+        "--vlm-timeout",
+        type=float,
+        default=30.0,
+        help="HTTP timeout in seconds for each VLM request.",
+    )
     return parser
 
 
@@ -502,6 +726,12 @@ def main() -> None:
         shuffle=args.shuffle,
         seed=args.seed,
         save_fraction=args.save_fraction,
+        vlm_check_interval=args.vlm_check_interval,
+        vlm_api_url=args.vlm_api_url,
+        vlm_api_key=args.vlm_api_key,
+        vlm_model=args.vlm_model,
+        vlm_prompt=args.vlm_prompt,
+        vlm_timeout=args.vlm_timeout,
     )
 
     print(f"Task {results['task_id']}: {results['task_name']} (seed={results['seed']})")
@@ -510,6 +740,8 @@ def main() -> None:
             "Episode "
             f"{episode['episode_idx']}: reset_state_id={episode['reset_state_id']}, "
             f"success={episode['success']}, steps={episode['steps']}, "
+            f"termination_source={episode['termination_source']}, "
+            f"termination_reason={episode['termination_reason']!r}, "
             f"video={episode['video_path']}"
         )
 

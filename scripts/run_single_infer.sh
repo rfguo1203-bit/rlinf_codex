@@ -10,6 +10,12 @@ NUM_EPISODES="1"
 SAVE_FRACTION="1.0"
 SEED=""
 SHUFFLE="false"
+VLM_CHECK_INTERVAL="0"
+VLM_API_URL=""
+VLM_API_KEY=""
+VLM_MODEL=""
+VLM_PROMPT='You are judging whether a robot manipulation task is already complete from a single camera image. Reply with strict JSON only: {"terminate": true/false, "reason": "short reason"}. Set terminate=true only when the task goal is clearly finished in the image.'
+VLM_TIMEOUT="30"
 
 # Task selection: use exactly one of the following modes.
 LIST_TASKS="false"
@@ -40,6 +46,30 @@ fi
 
 if [[ "${SHUFFLE}" == "true" ]]; then
   ARGS+=(--shuffle)
+fi
+
+if [[ "${VLM_CHECK_INTERVAL}" != "0" ]]; then
+  ARGS+=(--vlm-check-interval "${VLM_CHECK_INTERVAL}")
+fi
+
+if [[ -n "${VLM_API_URL}" ]]; then
+  ARGS+=(--vlm-api-url "${VLM_API_URL}")
+fi
+
+if [[ -n "${VLM_API_KEY}" ]]; then
+  ARGS+=(--vlm-api-key "${VLM_API_KEY}")
+fi
+
+if [[ -n "${VLM_MODEL}" ]]; then
+  ARGS+=(--vlm-model "${VLM_MODEL}")
+fi
+
+if [[ -n "${VLM_PROMPT}" ]]; then
+  ARGS+=(--vlm-prompt "${VLM_PROMPT}")
+fi
+
+if [[ -n "${VLM_TIMEOUT}" ]]; then
+  ARGS+=(--vlm-timeout "${VLM_TIMEOUT}")
 fi
 
 python scripts/simple_eval_libero10_pi05.py "${ARGS[@]}"
