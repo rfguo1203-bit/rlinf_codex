@@ -27,6 +27,7 @@ import random
 import re
 import secrets
 import ssl
+import socket
 import urllib.error
 import urllib.request
 from itertools import accumulate
@@ -365,37 +366,64 @@ def _query_vlm_termination(
     )
     if x_auth_token:
         request.add_header("x-auth-token", x_auth_token)
-    try:
-        with urllib.request.urlopen(
-            request,
-            timeout=timeout,
-            context=ssl.create_default_context(),
-        ) as response:
-            response_bytes = response.read()
-            response_text = response_bytes.decode("utf-8", errors="replace").strip()
-            if not response_text:
-                raise RuntimeError(
-                    "VLM response body is empty. "
-                    f"content_type={response.headers.get('Content-Type')!r}"
+    last_timeout_error: TimeoutError | None = None
+    for attempt in range(1, 4):
+        try:
+            with urllib.request.urlopen(
+                request,
+                timeout=timeout,
+                context=ssl.create_default_context(),
+            ) as response:
+                response_bytes = response.read()
+                response_text = response_bytes.decode("utf-8", errors="replace").strip()
+                if not response_text:
+                    raise RuntimeError(
+                        "VLM response body is empty. "
+                        f"content_type={response.headers.get('Content-Type')!r}"
+                    )
+                try:
+                    response_payload = json.loads(response_text)
+                except json.JSONDecodeError as exc:
+                    response_preview = response_text[:500]
+                    raise RuntimeError(
+                        "VLM response is not valid JSON. "
+                        f"content_type={response.headers.get('Content-Type')!r}, "
+                        f"body_preview={response_preview!r}"
+                    ) from exc
+                return _parse_vlm_decision(response_payload)
+        except urllib.error.HTTPError as exc:
+            body = exc.read().decode("utf-8", errors="replace")
+            raise RuntimeError(
+                f"VLM request failed with HTTP {exc.code}: {body}"
+            ) from exc
+        except urllib.error.URLError as exc:
+            is_timeout = isinstance(exc.reason, TimeoutError | socket.timeout)
+            if is_timeout:
+                last_timeout_error = TimeoutError(
+                    f"VLM request timed out after {timeout}s on attempt {attempt}/3."
                 )
-            try:
-                response_payload = json.loads(response_text)
-            except json.JSONDecodeError as exc:
-                response_preview = response_text[:500]
-                raise RuntimeError(
-                    "VLM response is not valid JSON. "
-                    f"content_type={response.headers.get('Content-Type')!r}, "
-                    f"body_preview={response_preview!r}"
-                ) from exc
-    except urllib.error.HTTPError as exc:
-        body = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(
-            f"VLM request failed with HTTP {exc.code}: {body}"
-        ) from exc
-    except urllib.error.URLError as exc:
-        raise RuntimeError(f"VLM request failed: {exc.reason}") from exc
+                if attempt < 3:
+                    continue
+                raise last_timeout_error from exc
+            raise RuntimeError(f"VLM request failed: {exc.reason}") from exc
+        except TimeoutError as exc:
+            last_timeout_error = TimeoutError(
+                f"VLM request timed out after {timeout}s on attempt {attempt}/3."
+            )
+            if attempt < 3:
+                continue
+            raise last_timeout_error from exc
+        except socket.timeout as exc:
+            last_timeout_error = TimeoutError(
+                f"VLM request timed out after {timeout}s on attempt {attempt}/3."
+            )
+            if attempt < 3:
+                continue
+            raise last_timeout_error from exc
 
-    return _parse_vlm_decision(response_payload)
+    if last_timeout_error is not None:
+        raise last_timeout_error
+    raise RuntimeError("VLM request failed for an unknown reason.")
 
 
 def run_single_task_eval(
@@ -515,7 +543,7 @@ def run_single_task_eval(
             progress_bar = tqdm(
                 total=env_cfg.max_episode_steps,
                 desc=f"Episode {episode_idx}",
-                leave=False,
+                leave=True,
             )
 
             try:
