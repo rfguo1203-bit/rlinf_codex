@@ -6,21 +6,21 @@ REPO_PATH="/workspace/RLinf"
 MODEL_PATH="/workspace/RLinf/weight/RLinf-Pi05-SFT"
 OUTPUT_DIR="/workspace/RLinf/outputs"
 CONFIG_NAME="libero_10_ppo_openpi_pi05"
-NUM_EPISODES="1"
-SAVE_FRACTION="1.0"
+NUM_EPISODES=1
+SAVE_FRACTION=1.0
 SEED=""
 SHUFFLE="false"
-VLM_CHECK_INTERVAL="0"
+VLM_CHECK_INTERVAL=0
 VLM_API_URL=""
 VLM_API_KEY=""
 VLM_X_AUTH_TOKEN="abcd1234"
 VLM_MODEL=""
 VLM_PROMPT='You are judging whether a robot manipulation task is already complete from a single camera image. Reply with strict JSON only: {"terminate": true/false, "reason": "short reason"}. Set terminate=true only when the task goal is clearly finished in the image.'
-VLM_TIMEOUT="30"
+VLM_TIMEOUT=30
 
 # Task selection: use exactly one of the following modes.
 LIST_TASKS="false"
-TASK_ID="0"
+TASK_ID=0
 TASK_NAME=""
 
 cd "${REPO_PATH}"
